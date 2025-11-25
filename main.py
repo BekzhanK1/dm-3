@@ -6,10 +6,13 @@ from sklearn.metrics import classification_report, confusion_matrix, accuracy_sc
 from tensorflow.keras.callbacks import EarlyStopping
 
 from preprocess_fake_news import get_data, VOCAB_SIZE, MAX_LENGTH
-from model import build_lstm_model
+from model import build_lstm_model, build_transformer_model
 import tuner
 
 import tensorflow as tf
+
+# Configuration
+MODEL_TYPE = "lstm" # Options: "lstm", "transformer"
 
 def create_plot_dirs():
     """Creates directory structure for saving plots."""
@@ -143,7 +146,7 @@ def main():
     check_gpu()
     
     print("===========================================================")
-    print("   LSTM Fake News Detection Pipeline (Two-Phase Strategy)")
+    print(f"   Fake News Detection Pipeline (Model: {MODEL_TYPE.upper()})")
     print("===========================================================")
 
     # ---------------------------------------------------------
@@ -153,7 +156,7 @@ def main():
     X_train_small, y_train_small, X_val_small, y_val_small, _, _, _ = get_data(subset_fraction=0.3)
     
     print("\n>>> PHASE 1: Running Importance Screening...")
-    screening_results = tuner.run_screening_phase(X_train_small, y_train_small, X_val_small, y_val_small)
+    screening_results = tuner.run_screening_phase(X_train_small, y_train_small, X_val_small, y_val_small, model_type=MODEL_TYPE)
     
     plot_param_importance(screening_results)
     
@@ -173,7 +176,7 @@ def main():
     X_train, y_train, X_val, y_val, X_test, y_test, tokenizer = get_data(subset_fraction=1.0)
     
     print("\n>>> PHASE 2: Running Local Optimum Search...")
-    best_config, search_history = tuner.run_local_search_phase(top_k_params, X_train, y_train, X_val, y_val)
+    best_config, search_history = tuner.run_local_search_phase(top_k_params, X_train, y_train, X_val, y_val, model_type=MODEL_TYPE)
     
     plot_local_search_results(search_history)
     
@@ -192,7 +195,10 @@ def main():
     model_params["vocab_size"] = VOCAB_SIZE
     model_params["input_length"] = MAX_LENGTH
     
-    final_model = build_lstm_model(**model_params)
+    if MODEL_TYPE == "lstm":
+        final_model = build_lstm_model(**model_params)
+    elif MODEL_TYPE == "transformer":
+        final_model = build_transformer_model(**model_params)
     
     early_stopping = EarlyStopping(
         monitor="val_loss", patience=5, restore_best_weights=True
@@ -217,10 +223,11 @@ def main():
     evaluate_model(final_model, X_test, y_test)
     
     # Save Model
-    final_model.save("best_fake_news_lstm_model.keras")
+    save_name = f"best_fake_news_{MODEL_TYPE}_model.keras"
+    final_model.save(save_name)
     print("\n===========================================================")
     print("   Pipeline Completed Successfully")
-    print("   Model saved to: best_fake_news_lstm_model.keras")
+    print(f"   Model saved to: {save_name}")
     print("   Plots saved to: plots/")
     print("===========================================================")
 

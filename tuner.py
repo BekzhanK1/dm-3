@@ -6,9 +6,9 @@ from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.metrics import f1_score
 
 from preprocess_fake_news import get_data, VOCAB_SIZE, MAX_LENGTH
-from model import build_lstm_model
+from model import build_lstm_model, build_transformer_model
 
-# Baseline Hyperparameters
+# Baseline Hyperparameters (LSTM)
 BASELINE_CONFIG = {
     "embedding_dim": 128,
     "lstm_units": 128,
@@ -19,15 +19,41 @@ BASELINE_CONFIG = {
     "optimizer_name": "Adam",
 }
 
-# Phase 1: Screening Space (OAT)
+# Phase 1: Screening Space (LSTM)
 SCREENING_SPACE = {
     "embedding_dim": [64, 128, 256],
     "lstm_units": [64, 128, 256, 512],
     "dropout_rate": [0.2, 0.3, 0.5],
-    "num_lstm_layers": [1, 2, 3],
+    "learning_rate": [0.0001, 0.001, 0.01],
+    "batch_size": [32, 64, 128],
+    "num_lstm_layers": [1, 2],
 }
 
-def train_and_evaluate(config: Dict[str, Any], X_train, y_train, X_val, y_val, verbose=0, epochs=3) -> Tuple[float, float, float]:
+# Baseline Hyperparameters (Transformer)
+TRANSFORMER_BASELINE_CONFIG = {
+    "embedding_dim": 64,
+    "num_heads": 2,
+    "ff_dim": 64,
+    "num_transformer_blocks": 1,
+    "dropout_rate": 0.1,
+    "dense_units": 32,
+    "learning_rate": 0.001,
+    "batch_size": 64,
+    "optimizer_name": "Adam",
+}
+
+# Phase 1: Screening Space (Transformer)
+TRANSFORMER_SCREENING_SPACE = {
+    "embedding_dim": [32, 64, 128],
+    "num_heads": [2, 4, 8],
+    "ff_dim": [32, 64, 128],
+    "num_transformer_blocks": [1, 2],
+    "dropout_rate": [0.1, 0.2, 0.3],
+    "learning_rate": [0.0001, 0.001, 0.01],
+    "batch_size": [32, 64],
+}
+
+def train_and_evaluate(config: Dict[str, Any], X_train, y_train, X_val, y_val, verbose=0, epochs=3, model_type="lstm") -> Tuple[float, float, float]:
     """
     Trains a model and returns (train_acc, val_acc, val_f1).
     """
@@ -39,7 +65,12 @@ def train_and_evaluate(config: Dict[str, Any], X_train, y_train, X_val, y_val, v
     model_params["vocab_size"] = VOCAB_SIZE
     model_params["input_length"] = MAX_LENGTH
     
-    model = build_lstm_model(**model_params)
+    if model_type == "lstm":
+        model = build_lstm_model(**model_params)
+    elif model_type == "transformer":
+        model = build_transformer_model(**model_params)
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
     
     early_stopping = EarlyStopping(
         monitor="val_loss", patience=2, restore_best_weights=True
@@ -70,35 +101,41 @@ def train_and_evaluate(config: Dict[str, Any], X_train, y_train, X_val, y_val, v
     
     return train_acc, val_acc, val_f1
 
-def run_screening_phase(X_train, y_train, X_val, y_val) -> List[Dict]:
+def run_screening_phase(X_train, y_train, X_val, y_val, model_type="lstm") -> List[Dict]:
     """
     Phase 1: Fast Importance Screening (Low-Fidelity).
-    Uses 30% data (passed in), 3 epochs.
-    Ranks by Delta F1.
     """
-    print("\n>>> PHASE 1: Fast Importance Screening (Low-Fidelity)")
+    print(f"\n>>> PHASE 1: Fast Importance Screening (Low-Fidelity) - Model: {model_type.upper()}")
+    
+    if model_type == "lstm":
+        baseline_cfg = BASELINE_CONFIG
+        space = SCREENING_SPACE
+    else:
+        baseline_cfg = TRANSFORMER_BASELINE_CONFIG
+        space = TRANSFORMER_SCREENING_SPACE
+        
     print("Running Baseline Model...")
-    _, base_val_acc, base_val_f1 = train_and_evaluate(BASELINE_CONFIG, X_train, y_train, X_val, y_val, verbose=1, epochs=3)
+    _, base_val_acc, base_val_f1 = train_and_evaluate(baseline_cfg, X_train, y_train, X_val, y_val, verbose=1, epochs=3, model_type=model_type)
     print(f"Baseline Results - Val Acc: {base_val_acc:.4f}, Val F1: {base_val_f1:.4f}")
     
     results = []
-    total_params = len(SCREENING_SPACE)
+    total_params = len(space)
     
-    for idx, (param, values) in enumerate(SCREENING_SPACE.items(), 1):
+    for idx, (param, values) in enumerate(space.items(), 1):
         print(f"\n[Screening] ({idx}/{total_params}) Testing sensitivity for: '{param}'")
         best_param_delta_f1 = 0
         
         for v_idx, value in enumerate(values, 1):
             # Skip if value is same as baseline to save time, but for plotting we might want it.
             # Let's run it if it's not baseline, or just use baseline result.
-            if value == BASELINE_CONFIG.get(param):
+            if value == baseline_cfg.get(param):
                 continue
                 
-            config = BASELINE_CONFIG.copy()
+            config = baseline_cfg.copy()
             config[param] = value
             
             print(f"  -> [{v_idx}/{len(values)}] Setting {param} = {value}")
-            _, val_acc, val_f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3)
+            _, val_acc, val_f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3, model_type=model_type)
             
             delta_f1 = val_f1 - base_val_f1
             print(f"     Result: Val F1 = {val_f1:.4f} (Delta: {delta_f1:+.4f})")
@@ -116,15 +153,20 @@ def run_screening_phase(X_train, y_train, X_val, y_val) -> List[Dict]:
     results.sort(key=lambda x: x["abs_impact"], reverse=True)
     return results
 
-def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_val) -> Tuple[Dict[str, Any], Dict[str, List[Tuple[Any, float]]]]:
+def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_val, model_type="lstm") -> Tuple[Dict[str, Any], Dict[str, List[Tuple[Any, float]]]]:
     """
     Phase 2: Local Optimum Search (High-Fidelity, Adaptive).
-    Uses full data.
     Returns: (best_config, search_history)
     """
-    print("\n>>> PHASE 2: Local Optimum Search (High-Fidelity)")
+    print(f"\n>>> PHASE 2: Local Optimum Search (High-Fidelity) - Model: {model_type.upper()}")
     
-    best_config = BASELINE_CONFIG.copy()
+    if model_type == "lstm":
+        best_config = BASELINE_CONFIG.copy()
+        space = SCREENING_SPACE
+    else:
+        best_config = TRANSFORMER_BASELINE_CONFIG.copy()
+        space = TRANSFORMER_SCREENING_SPACE
+        
     search_history = {} # Stores results for plotting: param -> [(val, f1), ...]
     
     # We tune one parameter at a time, starting from the most important
@@ -133,20 +175,11 @@ def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_v
         
         # 1. Coarse Sweep
         # Define coarse range based on parameter type
-        if param == "lstm_units":
-            coarse_values = [64, 128, 256, 512]
-        elif param == "embedding_dim":
-            coarse_values = [64, 128, 256]
-        elif param == "dropout_rate":
-            coarse_values = [0.2, 0.3, 0.4, 0.5]
-        elif param == "learning_rate":
-            coarse_values = [0.0001, 0.001, 0.01]
-        elif param == "batch_size":
-            coarse_values = [32, 64, 128]
-        elif param == "num_lstm_layers":
-            coarse_values = [1, 2, 3]
+        if param in space:
+             coarse_values = space[param]
         else:
-            coarse_values = SCREENING_SPACE.get(param, [])
+             # Fallback defaults if not in space
+             coarse_values = [32, 64, 128]
             
         print(f"  Coarse Sweep: {coarse_values}")
         
@@ -157,7 +190,7 @@ def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_v
         for val in coarse_values:
             config = best_config.copy()
             config[param] = val
-            _, _, f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3)
+            _, _, f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3, model_type=model_type)
             results.append((val, f1))
             print(f"    {param}={val} -> F1: {f1:.4f}")
             
@@ -179,9 +212,9 @@ def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_v
             
             if best_val == max_val:
                 # Try larger
-                if param in ["lstm_units", "embedding_dim", "batch_size"]:
+                if param in ["lstm_units", "embedding_dim", "batch_size", "ff_dim", "dense_units"]:
                     expanded_val = best_val * 2
-                elif param == "num_lstm_layers":
+                elif param in ["num_lstm_layers", "num_transformer_blocks", "num_heads"]:
                     expanded_val = best_val + 1
                 elif param == "dropout_rate":
                     expanded_val = round(best_val + 0.1, 2)
@@ -191,10 +224,10 @@ def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_v
                     
             elif best_val == min_val:
                 # Try smaller
-                if param in ["lstm_units", "embedding_dim", "batch_size"]:
+                if param in ["lstm_units", "embedding_dim", "batch_size", "ff_dim", "dense_units"]:
                     expanded_val = int(best_val / 2)
                     if expanded_val < 1: expanded_val = None
-                elif param == "num_lstm_layers":
+                elif param in ["num_lstm_layers", "num_transformer_blocks", "num_heads"]:
                     expanded_val = best_val - 1
                     if expanded_val < 1: expanded_val = None
                 elif param == "dropout_rate":
@@ -210,7 +243,7 @@ def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_v
             print(f"  ! Best value ({best_val}) is at edge. Expanding search to {expanded_val}...")
             config = best_config.copy()
             config[param] = expanded_val
-            _, _, f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3)
+            _, _, f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3, model_type=model_type)
             results.append((expanded_val, f1))
             print(f"    {param}={expanded_val} -> F1: {f1:.4f}")
             
@@ -238,7 +271,7 @@ def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_v
         
         # Logic to zoom in
         fine_values = []
-        if param in ["lstm_units", "embedding_dim", "batch_size"]:
+        if param in ["lstm_units", "embedding_dim", "batch_size", "ff_dim", "dense_units"]:
             # Geometric mean neighbors
             if best_idx > 0:
                 prev_val = sorted_results[best_idx-1][0]
@@ -261,7 +294,7 @@ def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_v
                 
                 config = best_config.copy()
                 config[param] = val
-                _, _, f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3)
+                _, _, f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3, model_type=model_type)
                 results.append((val, f1))
                 print(f"    {param}={val} -> F1: {f1:.4f}")
                 
