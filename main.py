@@ -9,12 +9,24 @@ from preprocess_fake_news import get_data, VOCAB_SIZE, MAX_LENGTH
 from model import build_lstm_model
 import tuner
 
+import tensorflow as tf
+
 def create_plot_dirs():
     """Creates directory structure for saving plots."""
     dirs = ["plots/phase1_screening", "plots/phase2_local_search", "plots/final_eval"]
     for d in dirs:
         os.makedirs(d, exist_ok=True)
     print("Created plot directories: plots/")
+
+def check_gpu():
+    """Checks and prints available GPUs."""
+    gpus = tf.config.list_physical_devices('GPU')
+    print(f"\n[System Check] Num GPUs Available: {len(gpus)}")
+    if gpus:
+        for gpu in gpus:
+            print(f"  - Found GPU: {gpu}")
+    else:
+        print("  ! WARNING: No GPU detected. Training will be slow.")
 
 def plot_history(history, title="Model Performance", save_path="plots/final_eval/training_curves.png"):
     """Plots training and validation accuracy/loss."""
@@ -92,6 +104,7 @@ def plot_param_importance(results):
 
 def main():
     create_plot_dirs()
+    check_gpu()
     
     print("===========================================================")
     print("   LSTM Fake News Detection Pipeline (Two-Phase Strategy)")
