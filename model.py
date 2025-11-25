@@ -1,3 +1,6 @@
+from tensorflow.keras import Sequential
+from tensorflow.keras.layers import Bidirectional, Dense, Dropout, Embedding, LSTM
+from tensorflow.keras.optimizers import Adam, RMSprop
 from tensorflow.keras.regularizers import l2
 
 def build_lstm_model(
