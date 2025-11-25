@@ -15,7 +15,7 @@ BASELINE_CONFIG = {
     "num_lstm_layers": 1,
     "dropout_rate": 0.3,
     "learning_rate": 0.001,
-    "batch_size": 64,
+    "batch_size": 32,
     "optimizer_name": "Adam",
 }
 
@@ -25,7 +25,6 @@ SCREENING_SPACE = {
     "lstm_units": [64, 128, 256, 512],
     "dropout_rate": [0.2, 0.3, 0.5],
     "learning_rate": [0.0001, 0.001, 0.01],
-    "batch_size": [32, 64, 128],
     "num_lstm_layers": [1, 2],
 }
 
