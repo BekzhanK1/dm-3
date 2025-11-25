@@ -14,12 +14,14 @@ import tensorflow as tf
 # Configuration
 MODEL_TYPE = "lstm" # Options: "lstm", "transformer"
 
-def create_plot_dirs():
-    """Creates directory structure for saving plots."""
-    dirs = ["plots/phase1_screening", "plots/phase2_local_search", "plots/final_eval"]
+def create_plot_dirs(model_type):
+    """Creates directory structure for saving plots specific to the model type."""
+    base_dir = f"plots/{model_type}"
+    dirs = [f"{base_dir}/phase1_screening", f"{base_dir}/phase2_local_search", f"{base_dir}/final_eval"]
     for d in dirs:
         os.makedirs(d, exist_ok=True)
-    print("Created plot directories: plots/")
+    print(f"Created plot directories: {base_dir}/")
+    return base_dir
 
 def check_gpu():
     """Checks and prints available GPUs."""
@@ -31,7 +33,7 @@ def check_gpu():
     else:
         print("  ! WARNING: No GPU detected. Training will be slow.")
 
-def plot_history(history, title="Model Performance", save_path="plots/final_eval/training_curves.png"):
+def plot_history(history, save_dir, title="Model Performance"):
     """Plots training and validation accuracy/loss."""
     acc = history.history['accuracy']
     val_acc = history.history['val_accuracy']
@@ -59,12 +61,13 @@ def plot_history(history, title="Model Performance", save_path="plots/final_eval
     plt.ylabel('Loss')
     plt.legend()
 
+    save_path = f"{save_dir}/final_eval/training_curves.png"
     plt.tight_layout()
     plt.savefig(save_path)
     print(f"Saved training curves to {save_path}")
     plt.close()
 
-def evaluate_model(model, X_test, y_test):
+def evaluate_model(model, X_test, y_test, save_dir):
     """Evaluates the model on the test set and prints metrics."""
     print("\n=== Final Evaluation on Test Set ===")
     
@@ -88,10 +91,12 @@ def evaluate_model(model, X_test, y_test):
     plt.title('Confusion Matrix')
     plt.ylabel('Actual')
     plt.xlabel('Predicted')
-    plt.savefig('plots/final_eval/confusion_matrix.png')
-    print("Saved confusion matrix to plots/final_eval/confusion_matrix.png")
+    
+    save_path = f"{save_dir}/final_eval/confusion_matrix.png"
+    plt.savefig(save_path)
+    print(f"Saved confusion matrix to {save_path}")
 
-def plot_param_importance(results):
+def plot_param_importance(results, save_dir):
     """Plots a bar chart of hyperparameter importance (Delta F1)."""
     params = [res['parameter'] for res in results]
     impacts = [res['abs_impact'] for res in results]
@@ -102,10 +107,12 @@ def plot_param_importance(results):
     plt.xlabel('Absolute Delta F1-Score')
     plt.ylabel('Hyperparameter')
     plt.tight_layout()
-    plt.savefig('plots/phase1_screening/param_importance.png')
-    print("Saved importance plot to plots/phase1_screening/param_importance.png")
+    
+    save_path = f"{save_dir}/phase1_screening/param_importance.png"
+    plt.savefig(save_path)
+    print(f"Saved importance plot to {save_path}")
 
-def plot_local_search_results(search_history):
+def plot_local_search_results(search_history, save_dir):
     """
     Plots the results of the local search phase (Param Value vs F1 Score).
     Identifies the 'sweet spot'.
@@ -136,13 +143,13 @@ def plot_local_search_results(search_history):
         plt.plot(max_x, max_f1, 'r*', markersize=15, label=f'Sweet Spot: {max_f1:.4f}')
         plt.legend()
         
-        save_path = f"plots/phase2_local_search/{param}_optimization.png"
+        save_path = f"{save_dir}/phase2_local_search/{param}_optimization.png"
         plt.savefig(save_path)
         plt.close()
         print(f"  Saved plot to {save_path}")
 
 def main():
-    create_plot_dirs()
+    plot_dir = create_plot_dirs(MODEL_TYPE)
     check_gpu()
     
     print("===========================================================")
@@ -158,7 +165,7 @@ def main():
     print("\n>>> PHASE 1: Running Importance Screening...")
     screening_results = tuner.run_screening_phase(X_train_small, y_train_small, X_val_small, y_val_small, model_type=MODEL_TYPE)
     
-    plot_param_importance(screening_results)
+    plot_param_importance(screening_results, plot_dir)
     
     print("\n[Phase 1 Result] Hyperparameter Sensitivity Ranking (by Delta F1):")
     for i, res in enumerate(screening_results):
@@ -178,7 +185,7 @@ def main():
     print("\n>>> PHASE 2: Running Local Optimum Search...")
     best_config, search_history = tuner.run_local_search_phase(top_k_params, X_train, y_train, X_val, y_val, model_type=MODEL_TYPE)
     
-    plot_local_search_results(search_history)
+    plot_local_search_results(search_history, plot_dir)
     
     print("\n[Phase 2 Result] Best Configuration Found:")
     for param, value in best_config.items():
@@ -219,8 +226,8 @@ def main():
     # ---------------------------------------------------------
     # Final Evaluation
     # ---------------------------------------------------------
-    plot_history(history)
-    evaluate_model(final_model, X_test, y_test)
+    plot_history(history, plot_dir)
+    evaluate_model(final_model, X_test, y_test, plot_dir)
     
     # Save Model
     save_name = f"best_fake_news_{MODEL_TYPE}_model.keras"
@@ -228,7 +235,7 @@ def main():
     print("\n===========================================================")
     print("   Pipeline Completed Successfully")
     print(f"   Model saved to: {save_name}")
-    print("   Plots saved to: plots/")
+    print(f"   Plots saved to: {plot_dir}/")
     print("===========================================================")
 
 if __name__ == "__main__":
