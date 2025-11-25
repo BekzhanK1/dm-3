@@ -116,14 +116,16 @@ def run_screening_phase(X_train, y_train, X_val, y_val) -> List[Dict]:
     results.sort(key=lambda x: x["abs_impact"], reverse=True)
     return results
 
-def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_val) -> Dict[str, Any]:
+def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_val) -> Tuple[Dict[str, Any], Dict[str, List[Tuple[Any, float]]]]:
     """
     Phase 2: Local Optimum Search (High-Fidelity, Adaptive).
     Uses full data.
+    Returns: (best_config, search_history)
     """
     print("\n>>> PHASE 2: Local Optimum Search (High-Fidelity)")
     
     best_config = BASELINE_CONFIG.copy()
+    search_history = {} # Stores results for plotting: param -> [(val, f1), ...]
     
     # We tune one parameter at a time, starting from the most important
     for param in top_k_params:
@@ -269,6 +271,7 @@ def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_v
         
         # Update best config for next parameter
         best_config[param] = best_val
+        search_history[param] = sorted(results, key=lambda x: x[0]) # Store sorted results
         print(f"  -> Selected optimal {param} = {best_val} (F1: {best_f1:.4f})")
         
-    return best_config
+    return best_config, search_history

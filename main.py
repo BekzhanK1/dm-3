@@ -102,6 +102,42 @@ def plot_param_importance(results):
     plt.savefig('plots/phase1_screening/param_importance.png')
     print("Saved importance plot to plots/phase1_screening/param_importance.png")
 
+def plot_local_search_results(search_history):
+    """
+    Plots the results of the local search phase (Param Value vs F1 Score).
+    Identifies the 'sweet spot'.
+    """
+    print("Generating local search plots...")
+    for param, results in search_history.items():
+        # results is a list of (value, f1) tuples, already sorted by value
+        values = [r[0] for r in results]
+        f1_scores = [r[1] for r in results]
+        
+        plt.figure(figsize=(8, 5))
+        
+        # Handle categorical/string values if any (though mostly numerical here)
+        if isinstance(values[0], str) or isinstance(values[0], bool):
+             plt.plot([str(v) for v in values], f1_scores, 'bo-', marker='o')
+             max_x = str(values[f1_scores.index(max(f1_scores))])
+        else:
+             plt.plot(values, f1_scores, 'bo-', marker='o')
+             max_x = values[f1_scores.index(max(f1_scores))]
+             
+        plt.title(f'Local Search: {param} vs F1 Score')
+        plt.xlabel(f'{param} Value')
+        plt.ylabel('Validation F1 Score')
+        plt.grid(True)
+        
+        # Highlight max point (Sweet Spot)
+        max_f1 = max(f1_scores)
+        plt.plot(max_x, max_f1, 'r*', markersize=15, label=f'Sweet Spot: {max_f1:.4f}')
+        plt.legend()
+        
+        save_path = f"plots/phase2_local_search/{param}_optimization.png"
+        plt.savefig(save_path)
+        plt.close()
+        print(f"  Saved plot to {save_path}")
+
 def main():
     create_plot_dirs()
     check_gpu()
@@ -137,7 +173,9 @@ def main():
     X_train, y_train, X_val, y_val, X_test, y_test, tokenizer = get_data(subset_fraction=1.0)
     
     print("\n>>> PHASE 2: Running Local Optimum Search...")
-    best_config = tuner.run_local_search_phase(top_k_params, X_train, y_train, X_val, y_val)
+    best_config, search_history = tuner.run_local_search_phase(top_k_params, X_train, y_train, X_val, y_val)
+    
+    plot_local_search_results(search_history)
     
     print("\n[Phase 2 Result] Best Configuration Found:")
     for param, value in best_config.items():
@@ -179,10 +217,10 @@ def main():
     evaluate_model(final_model, X_test, y_test)
     
     # Save Model
-    final_model.save("best_fake_news_lstm_model.h5")
+    final_model.save("best_fake_news_lstm_model.keras")
     print("\n===========================================================")
     print("   Pipeline Completed Successfully")
-    print("   Model saved to: best_fake_news_lstm_model.h5")
+    print("   Model saved to: best_fake_news_lstm_model.keras")
     print("   Plots saved to: plots/")
     print("===========================================================")
 
