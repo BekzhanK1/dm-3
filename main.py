@@ -12,7 +12,7 @@ import tuner
 import tensorflow as tf
 
 # Configuration
-MODEL_TYPE = "lstm" # Options: "lstm", "transformer"
+MODEL_TYPE = "transformer" # Options: "lstm", "transformer"
 
 def create_plot_dirs(model_type):
     """Creates directory structure for saving plots specific to the model type."""
