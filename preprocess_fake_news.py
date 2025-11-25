@@ -1,5 +1,7 @@
+import pickle
 import re
 from pathlib import Path
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -7,16 +9,16 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.preprocessing.text import Tokenizer
 
-
 VOCAB_SIZE = 10_000
 OOV_TOKEN = "<OOV>"
-MAX_LENGTH = 256
+MAX_LENGTH = 500  # Updated to 500 as per outline
 DEFAULT_FILTERS = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n'
 TOKEN_FILTERS = DEFAULT_FILTERS.replace("!", "").replace("?", "")
 
 DATA_DIR = Path(__file__).resolve().parent
 FAKE_PATH = DATA_DIR / "Fake.csv"
 TRUE_PATH = DATA_DIR / "True.csv"
+PROCESSED_DATA_PATH = DATA_DIR / "processed_data.pkl"
 
 
 def clean_text_lstm(text: str) -> str:
@@ -49,10 +51,16 @@ def clean_text_lstm(text: str) -> str:
 
 def load_and_prepare_dataframe(fake_path: Path, true_path: Path) -> pd.DataFrame:
     fake_df = pd.read_csv(fake_path)
-    fake_df["label"] = 1
-
+    fake_df["label"] = 0  # Fake = 0 as per outline request "label: 0=Fake, 1=True" -> Wait, outline says "label: 0=Fake, 1=True"
+    # Actually, usually Fake is 1 in detection tasks, but I will strictly follow the outline:
+    # "label: 0=Fake, 1=True"
+    # Wait, let me double check the outline.
+    # "label: 0=Fake, 1=True"
+    
+    fake_df["label"] = 0
+    
     true_df = pd.read_csv(true_path)
-    true_df["label"] = 0
+    true_df["label"] = 1
 
     for df in (fake_df, true_df):
         df["title"] = df["title"].fillna("")
@@ -65,10 +73,10 @@ def load_and_prepare_dataframe(fake_path: Path, true_path: Path) -> pd.DataFrame
         .reset_index(drop=True)
     )
     combined_df["clean_text"] = combined_df["combined_text"].apply(clean_text_lstm)
-    return combined_df, true_df
+    return combined_df
 
 
-def tokenize_and_pad(texts: pd.Series):
+def tokenize_and_pad(texts: pd.Series) -> Tuple[np.ndarray, Tokenizer]:
     tokenizer = Tokenizer(
         num_words=VOCAB_SIZE,
         oov_token=OOV_TOKEN,
@@ -84,39 +92,66 @@ def tokenize_and_pad(texts: pd.Series):
     return padded, tokenizer
 
 
-def display_sample_reuters_removal(true_df: pd.DataFrame) -> None:
-    mask = true_df["combined_text"].str.contains("reuters", case=False, na=False)
-    if mask.any():
-        sample_raw = true_df.loc[mask, "combined_text"].iloc[0]
-    else:
-        sample_raw = true_df["combined_text"].iloc[0]
+def get_data() -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Tokenizer]:
+    """
+    Loads data, preprocesses, splits into Train (70%), Val (15%), Test (15%).
+    Returns: X_train, y_train, X_val, y_val, X_test, y_test, tokenizer
+    """
+    if PROCESSED_DATA_PATH.exists():
+        print(f"Loading processed data from {PROCESSED_DATA_PATH}...")
+        with open(PROCESSED_DATA_PATH, "rb") as f:
+            return pickle.load(f)
 
-    sample_clean = clean_text_lstm(sample_raw)
-    print("Raw True sample:\n", sample_raw[:400], "\n")
-    print("Cleaned True sample (Reuters removed):\n", sample_clean[:400], "\n")
-
-
-def main():
-    combined_df, true_df = load_and_prepare_dataframe(FAKE_PATH, TRUE_PATH)
-
+    print("Processing data from scratch...")
+    print(f"  Loading raw data from {FAKE_PATH} and {TRUE_PATH}...")
+    combined_df = load_and_prepare_dataframe(FAKE_PATH, TRUE_PATH)
+    print(f"  Data loaded. Total samples: {len(combined_df)}")
+    
+    print("  Tokenizing and padding text data...")
     padded_sequences, tokenizer = tokenize_and_pad(combined_df["clean_text"])
     labels = combined_df["label"].to_numpy(dtype=np.int32)
+    print(f"  Tokenization complete. Shape: {padded_sequences.shape}")
 
-    X_train, X_test, y_train, y_test = train_test_split(
+    print("  Splitting data into Train (70%), Val (15%), Test (15%)...")
+    # First split: 70% Train, 30% Temp (Val + Test)
+    X_train, X_temp, y_train, y_temp = train_test_split(
         padded_sequences,
         labels,
-        test_size=0.2,
+        test_size=0.3,
         random_state=42,
         stratify=labels,
     )
 
-    print(f"Tokenizer vocabulary size (capped): {VOCAB_SIZE}")
-    print("X_train shape:", X_train.shape)
-    print("X_test shape:", X_test.shape)
-    print("y_train shape:", y_train.shape)
-    print("y_test shape:", y_test.shape)
+    # Second split: Split Temp into 50% Val, 50% Test (which is 15% of total each)
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp,
+        y_temp,
+        test_size=0.5,
+        random_state=42,
+        stratify=y_temp,
+    )
+    
+    print("  Data splitting complete.")
+    data = (X_train, y_train, X_val, y_val, X_test, y_test, tokenizer)
+    
+    print(f"  Saving processed data to {PROCESSED_DATA_PATH}...")
+    with open(PROCESSED_DATA_PATH, "wb") as f:
+        pickle.dump(data, f)
+    print("  Data saved successfully.")
+        
+    return data
 
-    display_sample_reuters_removal(true_df)
+
+def main():
+    X_train, y_train, X_val, y_val, X_test, y_test, tokenizer = get_data()
+    
+    print(f"Tokenizer vocabulary size: {VOCAB_SIZE}")
+    print("X_train shape:", X_train.shape)
+    print("y_train shape:", y_train.shape)
+    print("X_val shape:", X_val.shape)
+    print("y_val shape:", y_val.shape)
+    print("X_test shape:", X_test.shape)
+    print("y_test shape:", y_test.shape)
 
 
 if __name__ == "__main__":
