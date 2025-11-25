@@ -19,19 +19,18 @@ BASELINE_CONFIG = {
 }
 
 # Search Space for Sensitivity Analysis (One-at-a-Time)
+# Restricted to model-related hyperparameters as per user request
 SENSITIVITY_SPACE = {
     "embedding_dim": [64, 256],
     "lstm_units": [64, 256, 512],
     "num_lstm_layers": [2, 3],
     "dropout_rate": [0.1, 0.5],
-    "learning_rate": [0.0005, 0.0001],
-    "batch_size": [32, 128],
-    "optimizer_name": ["RMSprop"],
 }
 
-def train_and_evaluate(config: Dict[str, Any], X_train, y_train, X_val, y_val, verbose=0) -> float:
+def train_and_evaluate(config: Dict[str, Any], X_train, y_train, X_val, y_val, verbose=0, epochs=1) -> float:
     """
     Trains a model with the given config and returns validation accuracy.
+    Defaults to 1 epoch for fast tuning.
     """
     # Extract training-specific params that are not model architecture params
     batch_size = config.get("batch_size", 64)
@@ -51,7 +50,7 @@ def train_and_evaluate(config: Dict[str, Any], X_train, y_train, X_val, y_val, v
         X_train,
         y_train,
         validation_data=(X_val, y_val),
-        epochs=5, # Keep epochs low for tuning speed, or use early stopping
+        epochs=epochs, 
         batch_size=batch_size,
         callbacks=[early_stopping],
         verbose=verbose,
