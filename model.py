@@ -1,6 +1,4 @@
-from tensorflow.keras import Sequential
-from tensorflow.keras.layers import Bidirectional, Dense, Dropout, Embedding, LSTM
-from tensorflow.keras.optimizers import Adam, RMSprop
+from tensorflow.keras.regularizers import l2
 
 def build_lstm_model(
     vocab_size: int,
@@ -9,6 +7,9 @@ def build_lstm_model(
     lstm_units: int = 128,
     num_lstm_layers: int = 1,
     dropout_rate: float = 0.3,
+    use_bidirectional: bool = False,
+    dense_units: int = 0,
+    l2_reg: float = 0.0,
     learning_rate: float = 0.001,
     optimizer_name: str = "Adam",
 ) -> Sequential:
@@ -29,12 +30,32 @@ def build_lstm_model(
     # LSTM Layers
     for i in range(num_lstm_layers):
         return_sequences = (i < num_lstm_layers - 1) # True for all but the last layer
-        model.add(LSTM(lstm_units, return_sequences=return_sequences))
+        
+        lstm_layer = LSTM(
+            lstm_units, 
+            return_sequences=return_sequences,
+            kernel_regularizer=l2(l2_reg) if l2_reg > 0 else None
+        )
+        
+        if use_bidirectional:
+            model.add(Bidirectional(lstm_layer))
+        else:
+            model.add(lstm_layer)
+            
         if return_sequences:
              model.add(Dropout(dropout_rate))
 
     # Final Dropout
     model.add(Dropout(dropout_rate))
+    
+    # Optional Dense Layer
+    if dense_units > 0:
+        model.add(Dense(
+            dense_units, 
+            activation='relu',
+            kernel_regularizer=l2(l2_reg) if l2_reg > 0 else None
+        ))
+        model.add(Dropout(dropout_rate))
     
     # Dense Output Layer
     model.add(Dense(1, activation="sigmoid"))

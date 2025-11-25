@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Any, Tuple
 from tensorflow.keras.callbacks import EarlyStopping
+from sklearn.metrics import f1_score
 
 from preprocess_fake_news import get_data, VOCAB_SIZE, MAX_LENGTH
 from model import build_lstm_model
@@ -18,21 +19,21 @@ BASELINE_CONFIG = {
     "optimizer_name": "Adam",
 }
 
-# Search Space for Sensitivity Analysis (One-at-a-Time)
-# Restricted to model-related hyperparameters as per user request
-SENSITIVITY_SPACE = {
-    "embedding_dim": [64, 256],
-    "lstm_units": [64, 256, 512],
-    "num_lstm_layers": [2, 3],
-    "dropout_rate": [0.1, 0.5],
+# Phase 1: Screening Space (OAT)
+SCREENING_SPACE = {
+    "embedding_dim": [64, 128, 256],
+    "lstm_units": [64, 128, 256, 512],
+    "dropout_rate": [0.2, 0.3, 0.5],
+    "learning_rate": [0.0001, 0.001, 0.01],
+    "batch_size": [32, 64, 128],
+    "num_lstm_layers": [1, 2],
 }
 
-def train_and_evaluate(config: Dict[str, Any], X_train, y_train, X_val, y_val, verbose=0, epochs=1) -> float:
+def train_and_evaluate(config: Dict[str, Any], X_train, y_train, X_val, y_val, verbose=0, epochs=3) -> Tuple[float, float, float]:
     """
-    Trains a model with the given config and returns validation accuracy.
-    Defaults to 1 epoch for fast tuning.
+    Trains a model and returns (train_acc, val_acc, val_f1).
     """
-    # Extract training-specific params that are not model architecture params
+    # Extract training-specific params
     batch_size = config.get("batch_size", 64)
     
     # Filter config for model builder
@@ -56,109 +57,220 @@ def train_and_evaluate(config: Dict[str, Any], X_train, y_train, X_val, y_val, v
         verbose=verbose,
     )
     
-    val_acc = max(history.history["val_accuracy"])
-    return val_acc
+    # Get best epoch metrics
+    val_acc_history = history.history["val_accuracy"]
+    train_acc_history = history.history["accuracy"]
+    best_epoch_idx = np.argmax(val_acc_history)
+    
+    val_acc = val_acc_history[best_epoch_idx]
+    train_acc = train_acc_history[best_epoch_idx]
+    
+    # Calculate F1 on validation set
+    y_pred_prob = model.predict(X_val, verbose=0)
+    y_pred = (y_pred_prob > 0.5).astype(int)
+    val_f1 = f1_score(y_val, y_pred)
+    
+    return train_acc, val_acc, val_f1
 
-def run_sensitivity_analysis(X_train, y_train, X_val, y_val) -> List[Dict]:
+def run_screening_phase(X_train, y_train, X_val, y_val) -> List[Dict]:
     """
-    Performs One-at-a-Time sensitivity analysis.
+    Phase 1: Fast Importance Screening (Low-Fidelity).
+    Uses 30% data (passed in), 3 epochs.
+    Ranks by Delta F1.
     """
-    print("\n[Sensitivity Analysis] Starting Baseline Model training...")
-    baseline_acc = train_and_evaluate(BASELINE_CONFIG, X_train, y_train, X_val, y_val, verbose=1)
-    print(f"[Sensitivity Analysis] Baseline Validation Accuracy: {baseline_acc:.4f}")
+    print("\n>>> PHASE 1: Fast Importance Screening (Low-Fidelity)")
+    print("Running Baseline Model...")
+    _, base_val_acc, base_val_f1 = train_and_evaluate(BASELINE_CONFIG, X_train, y_train, X_val, y_val, verbose=1, epochs=3)
+    print(f"Baseline Results - Val Acc: {base_val_acc:.4f}, Val F1: {base_val_f1:.4f}")
     
     results = []
-    total_params = len(SENSITIVITY_SPACE)
+    total_params = len(SCREENING_SPACE)
     
-    for idx, (param, values) in enumerate(SENSITIVITY_SPACE.items(), 1):
-        print(f"\n[Sensitivity Analysis] ({idx}/{total_params}) Testing sensitivity for parameter: '{param}'")
-        best_param_delta = 0
+    for idx, (param, values) in enumerate(SCREENING_SPACE.items(), 1):
+        print(f"\n[Screening] ({idx}/{total_params}) Testing sensitivity for: '{param}'")
+        best_param_delta_f1 = 0
         
         for v_idx, value in enumerate(values, 1):
+            # Skip if value is same as baseline to save time, but for plotting we might want it.
+            # Let's run it if it's not baseline, or just use baseline result.
+            if value == BASELINE_CONFIG.get(param):
+                continue
+                
             config = BASELINE_CONFIG.copy()
             config[param] = value
             
             print(f"  -> [{v_idx}/{len(values)}] Setting {param} = {value}")
-            acc = train_and_evaluate(config, X_train, y_train, X_val, y_val)
-            delta = acc - baseline_acc
-            print(f"     Result: Val Acc = {acc:.4f} (Delta: {delta:+.4f})")
+            _, val_acc, val_f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3)
             
-            # Track the maximum absolute impact of this parameter
-            if abs(delta) > abs(best_param_delta):
-                best_param_delta = delta
+            delta_f1 = val_f1 - base_val_f1
+            print(f"     Result: Val F1 = {val_f1:.4f} (Delta: {delta_f1:+.4f})")
+            
+            if abs(delta_f1) > abs(best_param_delta_f1):
+                best_param_delta_f1 = delta_f1
         
         results.append({
             "parameter": param,
-            "max_delta": best_param_delta,
-            "abs_impact": abs(best_param_delta)
+            "max_delta_f1": best_param_delta_f1,
+            "abs_impact": abs(best_param_delta_f1)
         })
         
-    # Sort by impact
+    # Rank by absolute impact on F1
     results.sort(key=lambda x: x["abs_impact"], reverse=True)
     return results
 
-def run_grid_search(top_k_params: List[str], X_train, y_train, X_val, y_val) -> Tuple[Dict, float]:
+def run_local_search_phase(top_k_params: List[str], X_train, y_train, X_val, y_val) -> Dict[str, Any]:
     """
-    Runs grid search on the top-k most important parameters.
+    Phase 2: Local Optimum Search (High-Fidelity, Adaptive).
+    Uses full data.
     """
-    print(f"\n[Grid Search] Starting Grid Search on Top-{len(top_k_params)} Parameters: {top_k_params}")
+    print("\n>>> PHASE 2: Local Optimum Search (High-Fidelity)")
     
-    # Create grid
-    param_grid = {}
-    for param in top_k_params:
-        # Include baseline value + sensitivity values
-        values = [BASELINE_CONFIG[param]] + SENSITIVITY_SPACE[param]
-        param_grid[param] = sorted(list(set(values))) # Unique values
-        
-    keys = param_grid.keys()
-    combinations = list(itertools.product(*param_grid.values()))
-    
-    print(f"[Grid Search] Total hyperparameter combinations to test: {len(combinations)}")
-    
-    best_acc = 0.0
     best_config = BASELINE_CONFIG.copy()
     
-    for i, values in enumerate(combinations):
-        current_config = BASELINE_CONFIG.copy()
-        combo_dict = dict(zip(keys, values))
-        current_config.update(combo_dict)
+    # We tune one parameter at a time, starting from the most important
+    for param in top_k_params:
+        print(f"\n[Local Search] Tuning parameter: {param}")
         
-        print(f"\n[Grid Search] Run {i+1}/{len(combinations)}")
-        print(f"  Configuration: {combo_dict}")
-        acc = train_and_evaluate(current_config, X_train, y_train, X_val, y_val)
-        print(f"  -> Validation Accuracy: {acc:.4f}")
-        
-        if acc > best_acc:
-            best_acc = acc
-            best_config = current_config
-            print(f"  -> New Best Model Found! (Acc: {best_acc:.4f})")
+        # 1. Coarse Sweep
+        # Define coarse range based on parameter type
+        if param == "lstm_units":
+            coarse_values = [64, 128, 256, 512]
+        elif param == "embedding_dim":
+            coarse_values = [64, 128, 256]
+        elif param == "dropout_rate":
+            coarse_values = [0.2, 0.3, 0.4, 0.5]
+        elif param == "learning_rate":
+            coarse_values = [0.0001, 0.001, 0.01]
+        elif param == "batch_size":
+            coarse_values = [32, 64, 128]
+        elif param == "num_lstm_layers":
+            coarse_values = [1, 2, 3]
+        else:
+            coarse_values = SCREENING_SPACE.get(param, [])
             
-    return best_config, best_acc
-
-def main():
-    X_train, y_train, X_val, y_val, _, _, _ = get_data()
-    
-    # 1. Sensitivity Analysis
-    print("=== Phase 1: Empirical Hyperparameter Importance Analysis ===")
-    sensitivity_results = run_sensitivity_analysis(X_train, y_train, X_val, y_val)
-    
-    print("\nParameter Importance Ranking:")
-    for i, res in enumerate(sensitivity_results):
-        print(f"{i+1}. {res['parameter']} (Impact: {res['abs_impact']:.4f})")
+        print(f"  Coarse Sweep: {coarse_values}")
         
-    # Select Top-K (e.g., k=3)
-    k = 3
-    top_k_params = [res["parameter"] for res in sensitivity_results[:k]]
-    print(f"\nSelected Top-{k} Parameters for Tuning: {top_k_params}")
-    
-    # 2. Systematic Tuning
-    print("\n=== Phase 2: Systematic Hyperparameter Tuning ===")
-    best_config, best_acc = run_grid_search(top_k_params, X_train, y_train, X_val, y_val)
-    
-    print("\n=== Tuning Complete ===")
-    print(f"Best Validation Accuracy: {best_acc:.4f}")
-    print("Best Configuration:")
-    print(best_config)
+        best_val = -1
+        best_f1 = -1
+        results = []
+        
+        for val in coarse_values:
+            config = best_config.copy()
+            config[param] = val
+            _, _, f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3)
+            results.append((val, f1))
+            print(f"    {param}={val} -> F1: {f1:.4f}")
+            
+            if f1 > best_f1:
+                best_f1 = f1
+                best_val = val
+                
+        # 1.5 Edge Expansion (Check if best value is at boundary)
+        # Sort results to easily check edges
+        sorted_results = sorted(results, key=lambda x: x[0])
+        min_val = sorted_results[0][0]
+        max_val = sorted_results[-1][0]
+        
+        expansion_attempts = 0
+        max_expansions = 2 # Limit expansions to avoid infinite loops
+        
+        while expansion_attempts < max_expansions:
+            expanded_val = None
+            
+            if best_val == max_val:
+                # Try larger
+                if param in ["lstm_units", "embedding_dim", "batch_size"]:
+                    expanded_val = best_val * 2
+                elif param == "num_lstm_layers":
+                    expanded_val = best_val + 1
+                elif param == "dropout_rate":
+                    expanded_val = round(best_val + 0.1, 2)
+                    if expanded_val >= 1.0: expanded_val = None
+                elif param == "learning_rate":
+                    expanded_val = best_val * 10
+                    
+            elif best_val == min_val:
+                # Try smaller
+                if param in ["lstm_units", "embedding_dim", "batch_size"]:
+                    expanded_val = int(best_val / 2)
+                    if expanded_val < 1: expanded_val = None
+                elif param == "num_lstm_layers":
+                    expanded_val = best_val - 1
+                    if expanded_val < 1: expanded_val = None
+                elif param == "dropout_rate":
+                    expanded_val = round(best_val - 0.1, 2)
+                    if expanded_val < 0: expanded_val = None
+                elif param == "learning_rate":
+                    expanded_val = best_val / 10
+            
+            # If no valid expansion or already tested, break
+            if expanded_val is None or expanded_val in [r[0] for r in results]:
+                break
+                
+            print(f"  ! Best value ({best_val}) is at edge. Expanding search to {expanded_val}...")
+            config = best_config.copy()
+            config[param] = expanded_val
+            _, _, f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3)
+            results.append((expanded_val, f1))
+            print(f"    {param}={expanded_val} -> F1: {f1:.4f}")
+            
+            # Update bounds and best
+            if f1 > best_f1:
+                best_f1 = f1
+                best_val = expanded_val
+                # Update min/max for next iteration
+                if expanded_val > max_val: max_val = expanded_val
+                if expanded_val < min_val: min_val = expanded_val
+            else:
+                # Expansion didn't help, stop expanding
+                break
+                
+            expansion_attempts += 1
 
-if __name__ == "__main__":
-    main()
+        # 2. Zoom In (Fine Sweep) if possible
+        # Re-sort results after expansion
+        sorted_results = sorted(results, key=lambda x: x[0])
+        best_idx = -1
+        for i, (v, f) in enumerate(sorted_results):
+            if v == best_val:
+                best_idx = i
+                break
+        
+        # Logic to zoom in
+        fine_values = []
+        if param in ["lstm_units", "embedding_dim", "batch_size"]:
+            # Geometric mean neighbors
+            if best_idx > 0:
+                prev_val = sorted_results[best_idx-1][0]
+                mid_left = int((prev_val + best_val) / 2)
+                fine_values.append(mid_left)
+            if best_idx < len(sorted_results) - 1:
+                next_val = sorted_results[best_idx+1][0]
+                mid_right = int((best_val + next_val) / 2)
+                fine_values.append(mid_right)
+                
+        elif param == "dropout_rate":
+            # +/- 0.05
+            fine_values = [round(best_val - 0.05, 2), round(best_val + 0.05, 2)]
+            fine_values = [v for v in fine_values if 0 <= v <= 0.9]
+            
+        if fine_values:
+            print(f"  Fine Sweep (Zooming in): {fine_values}")
+            for val in fine_values:
+                if val in [r[0] for r in results]: continue # Skip if already tested
+                
+                config = best_config.copy()
+                config[param] = val
+                _, _, f1 = train_and_evaluate(config, X_train, y_train, X_val, y_val, epochs=3)
+                results.append((val, f1))
+                print(f"    {param}={val} -> F1: {f1:.4f}")
+                
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_val = val
+        
+        # Update best config for next parameter
+        best_config[param] = best_val
+        print(f"  -> Selected optimal {param} = {best_val} (F1: {best_f1:.4f})")
+        
+    return best_config

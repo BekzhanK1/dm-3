@@ -92,19 +92,31 @@ def tokenize_and_pad(texts: pd.Series) -> Tuple[np.ndarray, Tokenizer]:
     return padded, tokenizer
 
 
-def get_data() -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Tokenizer]:
+def get_data(subset_fraction: float = 1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Tokenizer]:
     """
     Loads data, preprocesses, splits into Train (70%), Val (15%), Test (15%).
     Returns: X_train, y_train, X_val, y_val, X_test, y_test, tokenizer
+    
+    Args:
+        subset_fraction: Fraction of data to use (e.g., 0.3 for 30%). 
+                         If < 1.0, it samples BEFORE splitting.
     """
-    if PROCESSED_DATA_PATH.exists():
+    # Note: We always load from scratch if subsetting to ensure correct sampling
+    # Or we can load full and sample. Let's load full and sample.
+    
+    if PROCESSED_DATA_PATH.exists() and subset_fraction == 1.0:
         print(f"Loading processed data from {PROCESSED_DATA_PATH}...")
         with open(PROCESSED_DATA_PATH, "rb") as f:
             return pickle.load(f)
 
-    print("Processing data from scratch...")
+    print(f"Processing data from scratch (Subset: {subset_fraction*100}%)...")
     print(f"  Loading raw data from {FAKE_PATH} and {TRUE_PATH}...")
     combined_df = load_and_prepare_dataframe(FAKE_PATH, TRUE_PATH)
+    
+    if subset_fraction < 1.0:
+        print(f"  Subsampling {subset_fraction*100}% of data...")
+        combined_df = combined_df.sample(frac=subset_fraction, random_state=42).reset_index(drop=True)
+        
     print(f"  Data loaded. Total samples: {len(combined_df)}")
     
     print("  Tokenizing and padding text data...")
@@ -134,10 +146,11 @@ def get_data() -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarr
     print("  Data splitting complete.")
     data = (X_train, y_train, X_val, y_val, X_test, y_test, tokenizer)
     
-    print(f"  Saving processed data to {PROCESSED_DATA_PATH}...")
-    with open(PROCESSED_DATA_PATH, "wb") as f:
-        pickle.dump(data, f)
-    print("  Data saved successfully.")
+    if subset_fraction == 1.0:
+        print(f"  Saving processed data to {PROCESSED_DATA_PATH}...")
+        with open(PROCESSED_DATA_PATH, "wb") as f:
+            pickle.dump(data, f)
+        print("  Data saved successfully.")
         
     return data
 
