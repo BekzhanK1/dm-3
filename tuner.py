@@ -24,8 +24,7 @@ SCREENING_SPACE = {
     "embedding_dim": [64, 128, 256],
     "lstm_units": [64, 128, 256, 512],
     "dropout_rate": [0.2, 0.3, 0.5],
-    "learning_rate": [0.0001, 0.001, 0.01],
-    "num_lstm_layers": [1, 2],
+    "num_lstm_layers": [1, 2, 3],
 }
 
 def train_and_evaluate(config: Dict[str, Any], X_train, y_train, X_val, y_val, verbose=0, epochs=3) -> Tuple[float, float, float]:
