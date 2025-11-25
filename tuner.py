@@ -15,7 +15,7 @@ BASELINE_CONFIG = {
     "num_lstm_layers": 1,
     "dropout_rate": 0.3,
     "learning_rate": 0.001,
-    "batch_size": 32,
+    "batch_size": 64,
     "optimizer_name": "Adam",
 }
 
