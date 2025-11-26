@@ -37,7 +37,7 @@ TRANSFORMER_BASELINE_CONFIG = {
     "num_transformer_blocks": 1,
     "dropout_rate": 0.1,
     "dense_units": 32,
-    "learning_rate": 0.001,
+    "learning_rate": 0.00075,
     "batch_size": 64,
     "optimizer_name": "Adam",
 }
@@ -49,7 +49,7 @@ TRANSFORMER_SCREENING_SPACE = {
     "ff_dim": [32, 64, 128],
     "num_transformer_blocks": [1, 2],
     "dropout_rate": [0.1, 0.2, 0.3],
-    "learning_rate": [0.0001, 0.0075, 0.001],
+    "learning_rate": [0.0001, 0.00075, 0.001],
     "batch_size": [32, 64],
 }
 
