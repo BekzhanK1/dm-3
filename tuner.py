@@ -49,7 +49,7 @@ TRANSFORMER_SCREENING_SPACE = {
     "ff_dim": [32, 64, 128],
     "num_transformer_blocks": [1, 2],
     "dropout_rate": [0.1, 0.2, 0.3],
-    "learning_rate": [0.0001, 0.001, 0.01],
+    "learning_rate": [0.0075, 0.0001, 0.001],
     "batch_size": [32, 64],
 }
 
